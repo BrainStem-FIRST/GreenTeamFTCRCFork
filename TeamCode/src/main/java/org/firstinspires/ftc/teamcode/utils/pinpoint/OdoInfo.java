@@ -25,13 +25,13 @@ public class OdoInfo {
     }
 
     public String toString(int numDecimalPlaces) {
-        return "x: " + MathUtils.format(x, numDecimalPlaces) + "y: " + MathUtils.format(y, numDecimalPlaces) + "h: " + MathUtils.format(headingRad, numDecimalPlaces);
+        return "x:" + MathUtils.format(x, numDecimalPlaces) + "y:" + MathUtils.format(y, numDecimalPlaces) + "h:" + MathUtils.format(headingRad, numDecimalPlaces);
     }
     public String toStringPosition(int numDecimalPlaces) {
-        return "x: " + MathUtils.format(x, numDecimalPlaces) + "y: " + MathUtils.format(y, numDecimalPlaces);
+        return "x:" + MathUtils.format(x, numDecimalPlaces) + "y:" + MathUtils.format(y, numDecimalPlaces);
     }
     public String toStringHeading(int numDecimalPlaces) {
-        return "h: " + MathUtils.format(headingRad, numDecimalPlaces);
+        return "h:" + MathUtils.format(headingRad, numDecimalPlaces);
 
     }
 }

@@ -12,7 +12,8 @@ public class Keybinds {
         AUTO_AIM,
         TRACK_SHOOTER_SPEED,
         START_SHOOTING,
-        CONTINUE_SHOOTING
+        CONTINUE_SHOOTING,
+        TRACK_POSE_PREDICT
     }
     public enum D2Trigger {
         INCREASE_SHOOTER_SPEED_STATE,
@@ -44,6 +45,7 @@ public class Keybinds {
         gt1Triggers.put(D1Trigger.TRACK_SHOOTER_SPEED, GamepadTracker::isRBClicked);
         gt1Triggers.put(D1Trigger.START_SHOOTING, GamepadTracker::isRBClicked);
         gt1Triggers.put(D1Trigger.CONTINUE_SHOOTING, GamepadTracker::isRBPressed);
+        gt1Triggers.put(D1Trigger.TRACK_POSE_PREDICT, GamepadTracker::isBackButtonPressed);
 
         gt2Triggers.put(D2Trigger.INCREASE_SHOOTER_SPEED_STATE, GamepadTracker::isYClicked);
         gt2Triggers.put(D2Trigger.DECREASE_SHOOTER_SPEED_STATE, GamepadTracker::isAClicked);

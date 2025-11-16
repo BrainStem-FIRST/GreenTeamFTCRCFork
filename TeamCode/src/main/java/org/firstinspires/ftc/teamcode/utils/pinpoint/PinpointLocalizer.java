@@ -13,7 +13,6 @@ import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.robotcore.external.navigation.UnnormalizedAngleUnit;
-import org.firstinspires.ftc.teamcode.utils.math.HeadingCorrect;
 import org.firstinspires.ftc.teamcode.utils.math.MathUtils;
 
 import java.util.ArrayList;
@@ -31,10 +30,15 @@ public final class PinpointLocalizer implements Localizer {
         public GoBildaPinpointDriver.EncoderDirection initialParDirection = GoBildaPinpointDriver.EncoderDirection.FORWARD, initialPerpDirection = GoBildaPinpointDriver.EncoderDirection.REVERSED;
     }
     public static class PosePredictParams {
+        public double startingDtEstimation = 0.02;
+        public int numPrevDeltaTimesToTrack = 10;
+        public double[] dtWeights = {0.3, 0.2, 0.15, 0.125, 0.075, 0.05, 0.03, 0.025, 0.025, 0.02 }; // MUST add up to 1
+
         public int numPrevVelocitiesToTrack = 4;
         public double maxLinearSpeedPerSecond = 10, maxHeadingDegSpeedPerSecond = 20;
         public boolean clampSpeeds = false;
         public double[] accelerationWeights = { 0.6, 0.3, 0.1 }; // MUST add up to 1
+        public double advancedPredictionVelocityDamping = 0.9;
     }
 
     public static SetupParams setupParams = new SetupParams();
@@ -47,8 +51,9 @@ public final class PinpointLocalizer implements Localizer {
     private final Telemetry telemetry;
     // previousVelocities[0] = most recent
     // previousAccelerations[0] is most recent, calculated with previousVelocities[0] and previousVelocities[1]
+    public final ArrayList<Double> previousDeltaTimes;
     public final ArrayList<OdoInfo> previousVelocities, previousAccelerations;
-    private double lastUpdateTimeMs;
+    private long lastUpdateTimeNano;
     public Pose2d lastPose;
     private int framesRunning;
 
@@ -73,9 +78,11 @@ public final class PinpointLocalizer implements Localizer {
         txWorldPinpoint = initialPose;
         lastPose = initialPose;
 
-        lastUpdateTimeMs = 0;
-        previousVelocities = new ArrayList<>();  // each entry contains x, y, and heading velocity
-        previousAccelerations = new ArrayList<>(); // each entry contains x, y, and heading acceleration
+        framesRunning = 0;
+        lastUpdateTimeNano = 0;
+        previousDeltaTimes = new ArrayList<>(); // stores recent delta times (seconds)
+        previousVelocities = new ArrayList<>();
+        previousAccelerations = new ArrayList<>();
 
         if (posePredictParams.accelerationWeights.length != posePredictParams.numPrevVelocitiesToTrack - 1)
             throw new IllegalArgumentException(("PosePredictParams has " + posePredictParams.accelerationWeights.length + " accelerationWeights but also specifies " + posePredictParams.numPrevVelocitiesToTrack + " velocities to track. These do not match"));
@@ -129,12 +136,27 @@ public final class PinpointLocalizer implements Localizer {
         telemetry.addData("position (in)", MathUtils.format2(pose().position.x) + ", " + MathUtils.format2(pose().position.y));
         telemetry.addData("heading (deg)", MathUtils.format2(Math.toDegrees(pose().heading.toDouble())));
     }
+    public boolean canGetNextPoseSimple() {
+        return !previousVelocities.isEmpty();
+    }
+    public boolean canGetNextPoseAdvanced() {
+        return !previousAccelerations.isEmpty();
+    }
     // predicts on most recent velocity
     public Pose2d getNextPoseSimple() {
-        return new Pose2d(pose().position.x + previousVelocities.get(0).x, pose().position.y + previousVelocities.get(0).y, pose().heading.toDouble() + previousVelocities.get(0).headingRad);
+        if (previousVelocities.isEmpty())
+            return pose();
+        double predictedDt = getWeightedDt();
+        return new Pose2d(
+                pose().position.x + previousVelocities.get(0).x * predictedDt,
+                pose().position.y + previousVelocities.get(0).y * predictedDt,
+                pose().heading.toDouble() + previousVelocities.get(0).headingRad * predictedDt
+        );
     }
     // predicts based on acceleration
     public Pose2d getNextPoseAdvanced() {
+        if (previousAccelerations.isEmpty())
+            return pose();
         // find weighted average of acceleration
         OdoInfo weightedAcceleration = new OdoInfo();
         for (int i=0; i<previousAccelerations.size(); i++) {
@@ -143,45 +165,65 @@ public final class PinpointLocalizer implements Localizer {
             weightedAcceleration.headingRad += previousAccelerations.get(i).headingRad * posePredictParams.accelerationWeights[i];
         }
 
+        double predictedDt = getWeightedDt();
         // predict the velocity of next frame
-        // new velocity = old velocity + acceleration (velocities and acceleration are already in the correct units)
+        // new velocity = old velocity + acceleration
         OdoInfo nextVelocity = previousVelocities.get(0);
-        nextVelocity.x += weightedAcceleration.x;
-        nextVelocity.y += weightedAcceleration.y;
-        nextVelocity.headingRad += weightedAcceleration.headingRad;
+        nextVelocity.x += weightedAcceleration.x * predictedDt;
+        nextVelocity.y += weightedAcceleration.y * predictedDt;
+        nextVelocity.headingRad += weightedAcceleration.headingRad * predictedDt;
+
+        // get velocity into correct time unit
+        nextVelocity.x *= predictedDt * posePredictParams.advancedPredictionVelocityDamping;
+        nextVelocity.y *= predictedDt * posePredictParams.advancedPredictionVelocityDamping;
+        nextVelocity.headingRad *= predictedDt * posePredictParams.advancedPredictionVelocityDamping;
 
         // predict the position of next frame
         // new position = old position + velocity
         return new Pose2d(pose().position.x + nextVelocity.x, pose().position.y + nextVelocity.y, pose().heading.toDouble() + nextVelocity.headingRad);
     }
+    public double getWeightedDt() {
+        if (framesRunning < posePredictParams.numPrevDeltaTimesToTrack)
+            return posePredictParams.startingDtEstimation;
+
+        double dt = 0;
+        for (int i=0; i<previousDeltaTimes.size(); i++)
+            dt += previousDeltaTimes.get(i) * posePredictParams.dtWeights[i];
+        return dt;
+    }
     private void updatePreviousVelocitiesAndAccelerations() {
+        double dt = (System.nanoTime() - lastUpdateTimeNano) * 1.0 * 1e-9; // delta time is in seconds
+        if (previousDeltaTimes.size() >= posePredictParams.numPrevDeltaTimesToTrack)
+            previousDeltaTimes.remove(previousDeltaTimes.size() - 1);
+        previousDeltaTimes.add(0, dt);
+
         // remove oldest velocity
-        if (previousVelocities.size() > posePredictParams.numPrevVelocitiesToTrack)
+        if (previousVelocities.size() >= posePredictParams.numPrevVelocitiesToTrack)
             previousVelocities.remove(previousVelocities.size() - 1);
 
-        // add most recent velocity (change in position between this frame and last frame)
-        // technically units would be inches/deltaTime
-        Pose2d curPose = pose();
-        double dx = curPose.position.x - lastPose.position.x;
-        double dy = curPose.position.y - lastPose.position.y;
-        double dh = HeadingCorrect.correctHeadingErrorRad(curPose.heading.toDouble() - lastPose.heading.toDouble());
+        // add most recent velocity
+//        Pose2d curPose = pose();
+//        double vx = (curPose.position.x - lastPose.position.x) / dt;
+//        double vy = (curPose.position.y - lastPose.position.y) / dt;
+//        double vh = (HeadingCorrect.correctHeadingErrorRad(curPose.heading.toDouble() - lastPose.heading.toDouble())) / dt;
+        double vx = driver.getVelX(DistanceUnit.INCH);
+        double vy = driver.getVelY(DistanceUnit.INCH);
+        double vh = driver.getHeadingVelocity(UnnormalizedAngleUnit.RADIANS);
 
         // clamp linear and heading velocity
         if (posePredictParams.clampSpeeds) {
-            double dt = (System.currentTimeMillis() - lastUpdateTimeMs) / 1000.0;
-            double linearSpeedPerSecond = Math.sqrt(dx * dx + dy * dy) / dt;
+            double linearSpeedPerSecond = Math.sqrt(vx * vx + vy * vy);
             if (linearSpeedPerSecond > posePredictParams.maxLinearSpeedPerSecond) {
-                dx *= posePredictParams.maxLinearSpeedPerSecond / linearSpeedPerSecond;
-                dy *= posePredictParams.maxLinearSpeedPerSecond / linearSpeedPerSecond;
+                vx *= posePredictParams.maxLinearSpeedPerSecond / linearSpeedPerSecond;
+                vy *= posePredictParams.maxLinearSpeedPerSecond / linearSpeedPerSecond;
             }
-            double headingSpeedPerSecond = dh / dt;
-            if (Math.abs(headingSpeedPerSecond) > Math.toRadians(posePredictParams.maxHeadingDegSpeedPerSecond))
-                dh = Math.signum(dh) * Math.toRadians(posePredictParams.maxHeadingDegSpeedPerSecond) * dt;
+            if (Math.abs(vh) > Math.toRadians(posePredictParams.maxHeadingDegSpeedPerSecond))
+                vh = Math.signum(vh) * Math.toRadians(posePredictParams.maxHeadingDegSpeedPerSecond);
         }
-        previousVelocities.add(0, new OdoInfo(dx, dy, dh));
+        previousVelocities.add(0, new OdoInfo(vx, vy, vh));
 
         // remove oldest acceleration
-        if (previousAccelerations.size() > posePredictParams.numPrevVelocitiesToTrack - 1)
+        if (previousAccelerations.size() >= posePredictParams.numPrevVelocitiesToTrack - 1)
             previousAccelerations.remove(previousAccelerations.size() - 1);
 
         // update acceleration
@@ -190,10 +232,10 @@ public final class PinpointLocalizer implements Localizer {
         // so this acceleration actually represents the change in velocity from last frame to this frame
         if (previousVelocities.size() > 1)
             previousAccelerations.add(0, new OdoInfo(
-                    previousVelocities.get(0).x - previousVelocities.get(1).x,
-                    previousVelocities.get(0).y - previousVelocities.get(1).y,
-                    previousVelocities.get(0).headingRad - previousVelocities.get(1).headingRad
+                    (previousVelocities.get(0).x - previousVelocities.get(1).x) / dt,
+                    (previousVelocities.get(0).y - previousVelocities.get(1).y) / dt,
+                    (previousVelocities.get(0).headingRad - previousVelocities.get(1).headingRad) / dt
             ));
-        lastUpdateTimeMs = System.currentTimeMillis();
+        lastUpdateTimeNano = System.nanoTime();
     }
 }

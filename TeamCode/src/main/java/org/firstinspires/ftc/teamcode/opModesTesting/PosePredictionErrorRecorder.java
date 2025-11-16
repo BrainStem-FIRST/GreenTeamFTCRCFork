@@ -15,8 +15,8 @@ import java.util.ArrayList;
 @Config
 @TeleOp(name="Pose Prediction Error Recorder", group="Data Recording")
 public class PosePredictionErrorRecorder extends OpMode {
-    public static int currentMode = 1;
-    public static boolean showAcceleration = true, showVelocity = false;
+    public static int currentMode = 0;
+    public static boolean showError = false, showAcceleration = true, showVelocity = false;
     public static int numDeciPlaces = 4;
     // double[] format = time, x, y, heading
     public static final ArrayList<OdoInfo> acceleration = new ArrayList<>(), velocity = new ArrayList<>();
@@ -58,6 +58,8 @@ public class PosePredictionErrorRecorder extends OpMode {
     }
 
     private void printCurrentInfo() {
+        telemetry.addLine("LOADING...");
+        telemetry.update();
         telemetry.addLine("===CONTROLS===");
         telemetry.addData("increment mode", "A");
         telemetry.addData("clear data", "Y");
@@ -65,26 +67,29 @@ public class PosePredictionErrorRecorder extends OpMode {
         telemetry.addData("available modes", "simple, advanced, comparison");
         telemetry.addLine();
         switch (currentMode) {
-            case 0: telemetry.addLine("=== 0: SIMPLE ESTIMATION ERROR ====="); break;
-            case 1: telemetry.addLine("=== 1: ADVANCED ESTIMATION ERROR ==="); break;
-            case 2: telemetry.addLine("=== 2: CONTROL GROUP ERROR ========="); break;
+            case 0: telemetry.addLine("=== 0: CONTROL GROUP ERROR ========="); break;
+            case 1: telemetry.addLine("=== 1: SIMPLE ESTIMATION ERROR ====="); break;
+            case 2: telemetry.addLine("=== 2: ADVANCED ESTIMATION ERROR ==="); break;
             case 3: telemetry.addLine("=== 3: COMPARISON =================="); break;
         }
         telemetry.addLine();
 
         if (currentMode != 3) {
-            ArrayList<OdoInfo> errorsToShow = predictionErrorsSimple;
+            ArrayList<OdoInfo> errorsToShow = controlGroupError;
             if (currentMode == 1)
-                errorsToShow = predictionErrorsAdvanced;
+                errorsToShow = predictionErrorsSimple;
             else if (currentMode == 2)
-                errorsToShow = controlGroupError;
+                errorsToShow = predictionErrorsAdvanced;
 
             for (int i = 0; i < errorsToShow.size(); i++) {
-                String error = "x: " + MathUtils.format(errorsToShow.get(i).x, numDeciPlaces) +
-                        "y: " + MathUtils.format(errorsToShow.get(i).y, numDeciPlaces) +
-                        "h: " + MathUtils.format(errorsToShow.get(i).headingRad, numDeciPlaces);
-                String vel = showVelocity ? " | " + velocity.get(i).toString(numDeciPlaces) : "";
-                String accel = showAcceleration ? " | " + acceleration.get(i).toString(numDeciPlaces) : "";
+                String error = showError ? "x:" + MathUtils.format(errorsToShow.get(i).x, numDeciPlaces) +
+                        "y:" + MathUtils.format(errorsToShow.get(i).y, numDeciPlaces) +
+                        "h:" + MathUtils.format(errorsToShow.get(i).headingRad, numDeciPlaces) : "";
+                String vel = showVelocity ? " |v" + velocity.get(i).toString(numDeciPlaces) : "";
+
+                String accel = "";
+                if (showAcceleration && i > 0)
+                    accel = " |a" + acceleration.get(i - 1).toString(numDeciPlaces);
                 telemetry.addLine(error + vel + accel);
             }
         }
@@ -119,11 +124,13 @@ public class PosePredictionErrorRecorder extends OpMode {
     }
 
     private OdoInfo calculateAverageError(ArrayList<OdoInfo> errors) {
+        if (errors.isEmpty())
+            return new OdoInfo(0, 0, 0);
         OdoInfo avgErrors = new OdoInfo();
         for (int i=1; i<errors.size(); i++) {
-            avgErrors.x += errors.get(i).x;
-            avgErrors.y += errors.get(i).y;
-            avgErrors.headingRad += errors.get(i).headingRad;
+            avgErrors.x += Math.abs(errors.get(i).x);
+            avgErrors.y += Math.abs(errors.get(i).y);
+            avgErrors.headingRad += Math.abs(errors.get(i).headingRad);
         }
         avgErrors.x /= errors.size();
         avgErrors.y /= errors.size();
@@ -133,25 +140,32 @@ public class PosePredictionErrorRecorder extends OpMode {
     // variance = sum of the squared differences from the mean
     // standard dev = sqrt(variance)
     private OdoInfo calculateAvgStandardDev(ArrayList<OdoInfo> errors) {
+        if (errors.isEmpty())
+            return new OdoInfo(0, 0, 0);
         OdoInfo avgErrors = calculateAverageError(errors);
         OdoInfo stds = new OdoInfo();
 
         for (int i=1; i<errors.size(); i++) { // exclude first column b/c first column is time
-            double xDiff = errors.get(i).x - avgErrors.x;
+            double xDiff = Math.abs(errors.get(i).x) - avgErrors.x;
             stds.x += xDiff * xDiff;
 
-            double yDiff = errors.get(i).y - avgErrors.y;
+            double yDiff = Math.abs(errors.get(i).y) - avgErrors.y;
             stds.y += yDiff * yDiff;
 
-            double headingRadDiff = errors.get(i).headingRad - avgErrors.headingRad;
+            double headingRadDiff = Math.abs(errors.get(i).headingRad) - avgErrors.headingRad;
             stds.headingRad += headingRadDiff * headingRadDiff;
         }
+        stds.x /= errors.size();
+        stds.y /= errors.size();
+        stds.headingRad /= errors.size();
         stds.x = Math.sqrt(stds.x);
         stds.y = Math.sqrt(stds.y);
         stds.headingRad = Math.sqrt(stds.headingRad);
         return stds;
     }
     private OdoInfo calculateMaxLinearError(ArrayList<OdoInfo> errors) {
+        if (errors.isEmpty())
+            return new OdoInfo(0, 0, 0);
         OdoInfo max = errors.get(0);
         for (OdoInfo info : errors)
             if (info.x * info.x + info.y * info.y > max.x * max.x + max.y * max.y)
@@ -159,6 +173,8 @@ public class PosePredictionErrorRecorder extends OpMode {
         return max;
     }
     private OdoInfo calculateMaxHeadingError(ArrayList<OdoInfo> errors) {
+        if (errors.isEmpty())
+            return new OdoInfo(0, 0, 0);
         OdoInfo max = errors.get(0);
         for (OdoInfo info : errors)
             if (Math.abs(info.headingRad) > Math.abs(max.headingRad))

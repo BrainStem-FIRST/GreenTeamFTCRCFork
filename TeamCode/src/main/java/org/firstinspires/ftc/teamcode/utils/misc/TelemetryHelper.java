@@ -9,7 +9,9 @@ import com.acmerobotics.roadrunner.Pose2d;
 @Config
 public class TelemetryHelper {
     public static String[] colors = { "red", "green" };
-    public static double fieldRotation = 90, robotRadius = 3;
+    public static Integer[] strokeWidths = { 1, 1 };
+    public static double strokeAlpha = 0.5;
+    public static double fieldRotation = 90, robotRadius = 5;
 
     public static void sendRobotPose(Pose2d ...poses) {
         TelemetryPacket packet = new TelemetryPacket();
@@ -18,6 +20,8 @@ public class TelemetryHelper {
 
         for (int i=0; i<poses.length; i++) {
             Pose2d pose = poses[i];
+            fieldOverlay.setAlpha(strokeAlpha);
+            fieldOverlay.setStrokeWidth(strokeWidths[i]);
             fieldOverlay.setStroke(colors[i % colors.length]);
             double x = pose.position.x, y = pose.position.y, heading = pose.heading.toDouble();
             fieldOverlay.strokeCircle(x, y, robotRadius);
