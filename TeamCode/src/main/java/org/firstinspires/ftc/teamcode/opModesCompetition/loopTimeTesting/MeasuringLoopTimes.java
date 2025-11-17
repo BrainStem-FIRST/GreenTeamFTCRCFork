@@ -9,6 +9,7 @@ import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 
+import org.firstinspires.ftc.teamcode.utils.caching.CachedDcMotorEx;
 import org.firstinspires.ftc.teamcode.utils.math.MathUtils;
 
 import java.util.List;
@@ -28,14 +29,14 @@ public class MeasuringLoopTimes extends OpMode {
     // hyper parameters
     public static String motorName = "intake";
     public static int numGetPowerCallsPerLoop = 0, numSetPowerCallsPerLoop = 0;
-    public static boolean useBulkCaching = false;
-    public static boolean changeMotorPower = false;
+    public static boolean useBulkCaching = false, useCachedMotor = false, changeMotorPower = false;
     public static int telemetryMsTransmissionInterval = 20;
 
     // instance data
     private int numLoops;
     private double totalDeltaTimeMs;
     private DcMotorEx motor;
+    private CachedDcMotorEx cachedMotor;
     private List<LynxModule> allHubs;
 
     @Override
@@ -47,6 +48,7 @@ public class MeasuringLoopTimes extends OpMode {
         motor = hardwareMap.get(DcMotorEx.class, motorName);
         motor.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
         motor.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+        cachedMotor = new CachedDcMotorEx(motor);
 
         allHubs = hardwareMap.getAll(LynxModule.class);
         // set bulk reading mode for each hub
@@ -62,12 +64,26 @@ public class MeasuringLoopTimes extends OpMode {
             for (LynxModule hub : allHubs)
                 hub.clearBulkCache();
 
+        // reset cached updates every frame
+        if (useCachedMotor)
+            cachedMotor.resetCachedUpdates();
+
         // perform hardware calls
         long startTime = System.nanoTime();
-        for (int i=0; i<numGetPowerCallsPerLoop; i++)
-            motor.getPower();
-        for (int i=0; i<numSetPowerCallsPerLoop; i++)
-            motor.setPower(changeMotorPower ? 0.5 * Math.sin(time * 0.25) : 0.2);
+        for (int i=0; i<numSetPowerCallsPerLoop; i++) {
+            if (useCachedMotor)
+                cachedMotor.setPower(changeMotorPower ? 0.5 * Math.sin(time * 0.25) : 0.2);
+            else
+                motor.setPower(changeMotorPower ? 0.5 * Math.sin(time * 0.25) : 0.2);
+            }
+
+        int position = 0;
+        for (int i=0; i<numGetPowerCallsPerLoop; i++) {
+            if (useCachedMotor)
+                position = cachedMotor.getCurrentPosition();
+            else
+                position = motor.getCurrentPosition();
+        }
 
         // track loop times
         double deltaTimeMs = (System.nanoTime() - startTime) * 1.0e-6;
@@ -75,6 +91,9 @@ public class MeasuringLoopTimes extends OpMode {
 
         numLoops++;
 
+        String positionDescription = useCachedMotor ? "cached " : "uncached ";
+        telemetry.addData(positionDescription + "position", position);
+        telemetry.addLine();
         telemetry.addData("delta time", MathUtils.format3(deltaTimeMs));
         telemetry.addData("average delta time", MathUtils.format3(totalDeltaTimeMs / numLoops));
         telemetry.addData("average loop time (ms)", MathUtils.format3(1000 * numLoops / time));
