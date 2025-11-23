@@ -206,7 +206,6 @@ public class TwelveBallAuto extends OpMode {
 
         robot.shooter.setZone(Shooter.Zone.NEAR);
         robot.shooter.setState(Shooter.State.TRACK_SHOOTER_SPEED);
-        robot.shooter.useCustomTargetSpeed(subsystemParams.targetSpeed);
         robot.shooter.setCustomHoodOffset(subsystemParams.hoodOffset);
         robot.intake.setUseAutoSlowFeedShooterPower(true);
         robot.intake.useMaxPreciseFeedShooterTime = true;
